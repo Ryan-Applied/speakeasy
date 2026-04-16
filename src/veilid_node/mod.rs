@@ -105,20 +105,19 @@ impl VeilidNode {
         veilid_config.protected_store.always_use_insecure_storage = false;
 
         info!("starting veilid node (namespace: {})", config.namespace);
-        // veilid-core's api_startup may internally create a tokio runtime.
-        // Calling it from within our #[tokio::main] causes "Cannot start a
-        // runtime from within a runtime". Run it on a clean OS thread with
-        // its own ephemeral runtime so there's no context conflict.
+        // veilid-core may internally create or block_on a tokio runtime.
+        // To avoid "Cannot start a runtime from within a runtime", we call
+        // api_startup on a clean OS thread with NO tokio context at all,
+        // using futures::executor to poll the future. veilid-core is then
+        // free to create whatever runtime it needs internally.
         let api = {
             let cb = update_callback;
             let cfg = veilid_config;
             let (tx, rx) = tokio::sync::oneshot::channel();
             std::thread::spawn(move || {
-                let rt = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .expect("failed to build ephemeral runtime");
-                let result = rt.block_on(veilid_core::api_startup(cb, cfg));
+                let result = futures::executor::block_on(
+                    veilid_core::api_startup(cb, cfg),
+                );
                 let _ = tx.send(result);
             });
             rx.await
@@ -154,8 +153,16 @@ impl VeilidNode {
         info!("node identity: {:?}", node_keypair.key());
         info!("safety route hops: {}", config.safety_route_hop_count);
 
-        // Attach to the network
-        api.attach().await.context("failed to attach to network")?;
+        // Attach to the network (also run off-runtime to be safe)
+        let api_clone = api.clone();
+        let (tx2, rx2) = tokio::sync::oneshot::channel();
+        std::thread::spawn(move || {
+            let result = futures::executor::block_on(api_clone.attach());
+            let _ = tx2.send(result);
+        });
+        rx2.await
+            .context("attach thread died")?
+            .context("failed to attach to network")?;
         info!("attached to veilid network");
 
         Ok(Self {
