@@ -105,9 +105,26 @@ impl VeilidNode {
         veilid_config.protected_store.always_use_insecure_storage = false;
 
         info!("starting veilid node (namespace: {})", config.namespace);
-        let api = veilid_core::api_startup(update_callback, veilid_config)
-            .await
-            .context("veilid api_startup failed")?;
+        // veilid-core's api_startup may internally create a tokio runtime.
+        // Calling it from within our #[tokio::main] causes "Cannot start a
+        // runtime from within a runtime". Run it on a clean OS thread with
+        // its own ephemeral runtime so there's no context conflict.
+        let api = {
+            let cb = update_callback;
+            let cfg = veilid_config;
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            std::thread::spawn(move || {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("failed to build ephemeral runtime");
+                let result = rt.block_on(veilid_core::api_startup(cb, cfg));
+                let _ = tx.send(result);
+            });
+            rx.await
+                .context("api_startup thread died")?
+                .context("veilid api_startup failed")?
+        };
 
         // Get the VLD0 crypto system to generate our identity keypair
         let crypto_holder = api
