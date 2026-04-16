@@ -1,0 +1,114 @@
+use anyhow::Result;
+use std::sync::Arc;
+use tracing::info;
+use tracing_subscriber::EnvFilter;
+
+use veilid_chat::chat::ChatService;
+use veilid_chat::dht::VeilidDht;
+use veilid_chat::identity::IdentityManager;
+use veilid_chat::storage::LocalStorage;
+
+use veilid_chat::veilid_node::{NodeConfig, VeilidNode};
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    // Log to file so it doesn't clobber the TUI.
+    let log_dir = dirs_data_dir();
+    std::fs::create_dir_all(&log_dir)?;
+    let log_file = std::fs::File::create(log_dir.join("veilid-chat.log"))?;
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
+        .with_writer(log_file)
+        .with_ansi(false)
+        .init();
+
+    info!("veilid-chat v{}", env!("CARGO_PKG_VERSION"));
+
+    // Determine data directory
+    let data_dir = dirs_data_dir();
+    std::fs::create_dir_all(&data_dir)?;
+    info!("data directory: {}", data_dir.display());
+
+    // ── Start Veilid node ────────────────────────────────────────
+    let storage_dir = data_dir.join("veilid");
+    std::fs::create_dir_all(&storage_dir)?;
+
+    let node_config = NodeConfig {
+        storage_dir: storage_dir.to_string_lossy().to_string(),
+        config_dir: storage_dir.to_string_lossy().to_string(),
+        ..Default::default()
+    };
+
+    let node = Arc::new(VeilidNode::start(node_config).await?);
+    info!("veilid node started");
+
+    // ── Initialize identity (with ProtectedStore) ────────────────
+    let mut identity_mgr =
+        IdentityManager::new(&data_dir).with_protected_store(node.clone());
+
+    if identity_mgr.load().await?.is_none() {
+        identity_mgr.create("veilid-user").await?;
+    }
+    let identity = identity_mgr.current().unwrap().clone();
+    info!("identity: {}", identity.display_name);
+
+    // ── Initialize local storage ─────────────────────────────────
+    let db_path = data_dir.join("veilid-chat.db");
+    let storage = if let Ok(hex_key) = std::env::var("VEILID_CHAT_DB_KEY") {
+        let key_bytes = hex_decode(&hex_key)?;
+        LocalStorage::open_encrypted(&db_path, &key_bytes)?
+    } else {
+        LocalStorage::open(&db_path)?
+    };
+
+    // ── Wire up services ─────────────────────────────────────────
+    let _dht = VeilidDht::new(node.clone());
+    let chat = ChatService::new(storage);
+
+    // ── Launch the terminal UI ───────────────────────────────────
+    info!("launching TUI");
+    veilid_chat::tui::run(chat, identity)?;
+    info!("TUI exited");
+
+    // ── Shutdown ─────────────────────────────────────────────────
+    match Arc::try_unwrap(node) {
+        Ok(n) => n.shutdown().await?,
+        Err(_) => info!("skipping graceful shutdown: other references still held"),
+    }
+
+    Ok(())
+}
+
+fn dirs_data_dir() -> std::path::PathBuf {
+    if let Ok(dir) = std::env::var("VEILID_CHAT_DATA") {
+        std::path::PathBuf::from(dir)
+    } else if let Some(dir) = dirs::data_local_dir() {
+        dir.join("veilid-chat")
+    } else {
+        std::path::PathBuf::from("./data")
+    }
+}
+
+fn hex_decode(s: &str) -> Result<Vec<u8>> {
+    let s = s.trim();
+    if s.len() % 2 != 0 {
+        anyhow::bail!("hex string must have even length");
+    }
+    (0..s.len())
+        .step_by(2)
+        .map(|i| {
+            u8::from_str_radix(&s[i..i + 2], 16)
+                .map_err(|e| anyhow::anyhow!("hex decode: {}", e))
+        })
+        .collect()
+}
+
+mod dirs {
+    pub fn data_local_dir() -> Option<std::path::PathBuf> {
+        std::env::var("HOME")
+            .ok()
+            .map(|h| std::path::PathBuf::from(h).join(".local").join("share"))
+    }
+}

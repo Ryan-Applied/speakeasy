@@ -1,0 +1,90 @@
+[package]
+name = "veilid-chat"
+version = "0.1.0"
+edition = "2021"
+description = "Decentralized peer-to-peer chat over Veilid"
+license = "MIT OR Apache-2.0"
+rust-version = "1.75"
+
+[dependencies]
+# Veilid
+veilid-core = "=0.5.3"
+# Pin transitive deps that veilid-core 0.5.x is compatible with -- the
+# ecosystem has drifted past what its loose semver allows. socket2 0.6
+# removed Socket::set_ttl(); attohttpc 0.25 changed log-closure signatures;
+# socket2 0.5.x and attohttpc 0.24 keep the older API surfaces veilid-core
+# 0.5 was written against. These appear here as direct deps purely to force
+# the resolver to unify on the working versions.
+socket2 = "0.5"
+attohttpc = { version = "0.24", default-features = false }
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+futures = "0.3"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rmp-serde = "1"         # msgpack
+base64 = "0.22"
+
+# Crypto supplements
+blake3 = "1"            # used alongside veilid for local hashing
+rand = "0.8"
+zeroize = { version = "1", features = ["derive"] }
+ed25519-dalek = { version = "2.1.1", features = ["rand_core", "zeroize"] }
+x25519-dalek = { version = "2.0.1", features = ["zeroize", "static_secrets"] }
+argon2 = "0.5"          # passphrase KDF for SQLCipher and identity at-rest
+
+# IDs
+ulid = "1"
+
+# Local storage
+# Pinned to 0.37 so libsqlite3-sys is unified with the version pulled in by
+# veilid-core's keyvaluedb-sqlite (only one `links="sqlite3"` allowed).
+# bundled-sqlcipher-vendored-openssl is the post-0.32 feature name for the
+# pre-built SQLCipher + vendored OpenSSL combo.
+rusqlite = { version = "0.38", features = ["bundled-sqlcipher-vendored-openssl"] }
+
+# QR code generation
+qrcode = "0.14"
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+# Audio (opt-in: requires cmake + a C toolchain to build audiopus's vendored
+# Opus). The audio/ module compiles without them (placeholder pass-through);
+# enable the `audio-codec` feature for real Opus encoding.
+cpal = { version = "0.15", optional = true }
+audiopus = { version = "0.3.0-rc.0", optional = true }
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# CLI (MVP terminal interface)
+crossterm = "0.28"
+ratatui = "0.29"
+
+[features]
+default = []
+# Real Opus capture/playback (requires cmake + C toolchain to build audiopus's
+# vendored Opus library). Without this feature, audio/ uses a passthrough
+# placeholder suitable for development without system build tools.
+audio-codec = ["dep:cpal", "dep:audiopus"]
+
+[dev-dependencies]
+tokio-test = "0.4"
+tempfile = "3"
+assert_matches = "1"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

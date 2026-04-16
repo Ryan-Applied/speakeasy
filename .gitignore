@@ -1,0 +1,51 @@
+# Build artifacts
+/target/
+
+# Cargo lock is committed for binary crates
+# Cargo.lock
+
+# Runtime data
+/data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Identity and secrets
+identity.bin
+*.key
+*.pem
+*.secret
+
+# Veilid node storage
+.veilid-chat/
+protected_store/
+table_store/
+block_store/
+
+# Logs
+*.log
+
+# QR code output
+invite.svg
+invite.png
+
+# OS files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.#*
+
+# Env files
+.env
+.env.*
+
+# Claude Code
+.claude/
