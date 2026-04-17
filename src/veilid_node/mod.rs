@@ -105,25 +105,9 @@ impl VeilidNode {
         veilid_config.protected_store.always_use_insecure_storage = false;
 
         info!("starting veilid node (namespace: {})", config.namespace);
-        // veilid-core may internally create or block_on a tokio runtime.
-        // To avoid "Cannot start a runtime from within a runtime", we call
-        // api_startup on a clean OS thread with NO tokio context at all,
-        // using futures::executor to poll the future. veilid-core is then
-        // free to create whatever runtime it needs internally.
-        let api = {
-            let cb = update_callback;
-            let cfg = veilid_config;
-            let (tx, rx) = tokio::sync::oneshot::channel();
-            std::thread::spawn(move || {
-                let result = futures::executor::block_on(
-                    veilid_core::api_startup(cb, cfg),
-                );
-                let _ = tx.send(result);
-            });
-            rx.await
-                .context("api_startup thread died")?
-                .context("veilid api_startup failed")?
-        };
+        let api = veilid_core::api_startup(update_callback, veilid_config)
+            .await
+            .context("veilid api_startup failed")?;
 
         // Get the VLD0 crypto system to generate our identity keypair
         let crypto_holder = api
@@ -153,16 +137,8 @@ impl VeilidNode {
         info!("node identity: {:?}", node_keypair.key());
         info!("safety route hops: {}", config.safety_route_hop_count);
 
-        // Attach to the network (also run off-runtime to be safe)
-        let api_clone = api.clone();
-        let (tx2, rx2) = tokio::sync::oneshot::channel();
-        std::thread::spawn(move || {
-            let result = futures::executor::block_on(api_clone.attach());
-            let _ = tx2.send(result);
-        });
-        rx2.await
-            .context("attach thread died")?
-            .context("failed to attach to network")?;
+        // Attach to the network
+        api.attach().await.context("failed to attach to network")?;
         info!("attached to veilid network");
 
         Ok(Self {
