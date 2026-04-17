@@ -265,14 +265,30 @@ impl App {
                     match InviteService::decode_from_string(code) {
                         Ok(invite) => match InviteService::validate(&invite) {
                             Ok(()) => {
-                                self.notification = Some(format!(
-                                    "Valid invite for room: {}",
-                                    invite
-                                        .room_name
-                                        .as_deref()
-                                        .unwrap_or("(unnamed)")
-                                ));
-                                // TODO: actually join the room via DHT
+                                let room_name = invite
+                                    .room_name
+                                    .clone()
+                                    .unwrap_or_else(|| "(unnamed)".into());
+                                match self.chat.join_room_from_invite(
+                                    &invite,
+                                    &self.identity.public_key,
+                                ) {
+                                    Ok(_room) => {
+                                        self.refresh_rooms();
+                                        // Select the newly joined room
+                                        if !self.rooms.is_empty() {
+                                            self.room_state
+                                                .select(Some(self.rooms.len() - 1));
+                                            self.refresh_messages();
+                                        }
+                                        self.notification =
+                                            Some(format!("Joined room: {}", room_name));
+                                    }
+                                    Err(e) => {
+                                        self.notification =
+                                            Some(format!("Join failed: {}", e));
+                                    }
+                                }
                             }
                             Err(e) => {
                                 self.notification = Some(format!("Invalid invite: {}", e))

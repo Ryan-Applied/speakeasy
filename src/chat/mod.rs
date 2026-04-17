@@ -137,6 +137,77 @@ impl ChatService {
         Ok(room)
     }
 
+    /// Join a room from a validated invite. Creates the room locally with
+    /// the invite's metadata so messages can be sent/received.
+    pub fn join_room_from_invite(
+        &self,
+        invite: &crate::models::ChatInvite,
+        our_public_key: &[u8],
+    ) -> Result<Room> {
+        let room_name = invite
+            .room_name
+            .clone()
+            .unwrap_or_else(|| "unnamed".into());
+
+        // Check if we already joined this room
+        if let Ok(Some(_)) = self.storage.get_room(&invite.room_id) {
+            anyhow::bail!("already joined room: {}", room_name);
+        }
+
+        let room_type = match invite.invite_type {
+            crate::models::InviteType::Direct => RoomType::Direct,
+            crate::models::InviteType::Room => RoomType::Group,
+        };
+
+        // For group rooms the invite creator will share the room key via
+        // a future key-exchange step. For now, generate a local key so
+        // the room record is valid. The real room key would come from
+        // the DHT room metadata record in a full implementation.
+        let room_key = CryptoService::generate_room_key();
+
+        let room = Room {
+            room_id: invite.room_id,
+            room_type,
+            name: room_name.clone(),
+            created_at: Utc::now(),
+            creator_key: invite.creator_public_key.clone(),
+            room_key,
+            dht_metadata_key: invite.dht_record_key.clone(),
+            dht_members_key: Vec::new(),
+            dht_messages_key: Vec::new(),
+            description: None,
+            members: vec![
+                // The invite creator
+                RoomMember {
+                    public_key: invite.creator_public_key.clone(),
+                    display_name: String::new(),
+                    role: MemberRole::Admin,
+                    joined_at: Utc::now(),
+                    subkey_start: 0,
+                    subkey_end: 999,
+                    route_data: invite.bootstrap_route.clone(),
+                },
+                // Us
+                RoomMember {
+                    public_key: our_public_key.to_vec(),
+                    display_name: String::new(),
+                    role: MemberRole::Member,
+                    joined_at: Utc::now(),
+                    subkey_start: 1000,
+                    subkey_end: 1999,
+                    route_data: None,
+                },
+            ],
+            last_sync_seq: 0,
+            schema_version: 1,
+            disappear_after_secs: None,
+        };
+
+        self.storage.insert_room(&room)?;
+        info!("joined room '{}' from invite ({})", room_name, hex_short(&room.room_id));
+        Ok(room)
+    }
+
     /// Compose and store a new outbound text message.
     ///
     /// When a VeilidNode is present, the message is serialized to msgpack,
