@@ -128,17 +128,28 @@ impl IdentityManager {
         Ok(self.identity.as_ref())
     }
 
-    /// Generate a NEW Ed25519 identity. Public is derived from secret per
-    /// the Ed25519 spec. Secret is persisted to ProtectedStore when a node
-    /// is wired; otherwise it stays in memory only.
+    /// Generate a NEW Ed25519 identity. When a VeilidNode is available, uses
+    /// veilid-core's crypto system so the keypair is compatible with node.sign().
+    /// Falls back to ed25519-dalek for standalone/test use.
     pub async fn create(&mut self, display_name: &str) -> Result<&UserIdentity> {
         info!("generating new Ed25519 identity for '{}'", display_name);
 
-        let signing_key = SigningKey::generate(&mut OsRng);
-        let verifying_key: VerifyingKey = signing_key.verifying_key();
-
-        let public_key = verifying_key.to_bytes().to_vec();
-        let mut secret_seed = signing_key.to_bytes(); // [u8; 32]
+        let (public_key, mut secret_seed): (Vec<u8>, [u8; 32]) =
+            if let Some(ref node) = self.node {
+                // Use veilid-core's crypto so keypair is compatible with node.sign()
+                let kp = node.generate_keypair();
+                let pk = kp.key().ref_value().bytes().to_vec();
+                let mut sk = [0u8; 32];
+                sk.copy_from_slice(&kp.secret().ref_value().bytes());
+                info!("identity keypair generated via veilid-core");
+                (pk, sk)
+            } else {
+                // Standalone: ed25519-dalek (for tests without a VeilidNode)
+                let signing_key = SigningKey::generate(&mut OsRng);
+                let pk = signing_key.verifying_key().to_bytes().to_vec();
+                let sk = signing_key.to_bytes();
+                (pk, sk)
+            };
 
         // Persist secret (if ProtectedStore wired) BEFORE writing the disk
         // profile -- if ProtectedStore save fails we don't want a profile
