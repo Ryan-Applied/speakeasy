@@ -538,6 +538,7 @@ impl App {
             match self.chat.compose_message(
                 &room_id,
                 &self.identity.public_key,
+                &self.identity.secret_key,
                 &text,
                 None,
             ) {

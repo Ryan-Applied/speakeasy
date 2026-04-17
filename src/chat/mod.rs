@@ -149,6 +149,7 @@ impl ChatService {
         &self,
         room_id: &[u8; 32],
         sender_key: &[u8],
+        sender_secret: &[u8],
         content: &str,
         reply_to: Option<&str>,
     ) -> Result<Message> {
@@ -186,12 +187,10 @@ impl ChatService {
                 vld0,
                 veilid_core::BarePublicKey::new(sender_key),
             );
-
-            // NOTE: we need the sender's secret key to sign. For now, the
-            // node's keypair is used. In production, the caller's identity
-            // secret would be passed in.
-            let node_kp = node.keypair();
-            let sender_sec = node_kp.secret().clone();
+            let sender_sec = veilid_core::SecretKey::new(
+                vld0,
+                veilid_core::BareSecretKey::new(sender_secret),
+            );
 
             // Build SharedSecret from room_key bytes
             let mut rk_bytes = [0u8; 32];
@@ -490,7 +489,7 @@ mod tests {
         let svc = setup();
         let room = svc.create_group_room("test", &[1u8; 32]).unwrap();
 
-        let msg = svc.compose_message(&room.room_id, &[1u8; 32], "hello", None).unwrap();
+        let msg = svc.compose_message(&room.room_id, &[1u8; 32], &[2u8; 32], "hello", None).unwrap();
         assert_eq!(msg.status, MessageStatus::Pending);
 
         // Simulate receive of same message (should dedup)
