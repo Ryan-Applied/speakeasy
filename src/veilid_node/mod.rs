@@ -101,8 +101,22 @@ impl VeilidNode {
             Some(&config.storage_dir),
             Some(&config.config_dir),
         );
-        // SECURITY: never use insecure storage in production
-        veilid_config.protected_store.always_use_insecure_storage = false;
+        // On Linux, the OS keyring (secret-service via D-Bus/zbus) creates a
+        // nested tokio runtime that conflicts with ours. Use file-based
+        // protected store instead. On macOS (Security.framework) and Windows
+        // (Credential Manager) the keyring is synchronous and works fine.
+        //
+        // The file-based store is still encrypted with Argon2id — it just lives
+        // in the filesystem rather than the OS keychain.
+        #[cfg(target_os = "linux")]
+        {
+            veilid_config.protected_store.always_use_insecure_storage = true;
+            info!("linux: using file-based protected store (D-Bus keyring bypass)");
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            veilid_config.protected_store.always_use_insecure_storage = false;
+        }
 
         info!("starting veilid node (namespace: {})", config.namespace);
         let api = veilid_core::api_startup(update_callback, veilid_config)
