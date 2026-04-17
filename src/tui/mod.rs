@@ -236,7 +236,19 @@ impl App {
                         Some(86400),
                     ) {
                         Ok(invite) => match InviteService::encode_to_string(&invite) {
-                            Ok(s) => self.notification = Some(format!("Invite: {}", s)),
+                            Ok(s) => {
+                                // Post the invite as a system message in the chat so
+                                // it word-wraps and can be fully selected/copied.
+                                let _ = self.chat.compose_message(
+                                    &room_id,
+                                    &self.identity.public_key,
+                                    &self.identity.secret_key,
+                                    &format!("--- INVITE (share this) ---\n{}", s),
+                                    None,
+                                );
+                                self.refresh_messages();
+                                self.notification = Some("Invite posted to chat (scroll up if needed)".into());
+                            }
                             Err(e) => self.notification = Some(format!("Error: {}", e)),
                         },
                         Err(e) => self.notification = Some(format!("Error: {}", e)),
