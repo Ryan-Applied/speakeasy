@@ -12,6 +12,8 @@
 //! - Nonces are never reused (random + sequence counter)
 //! - Signatures are verified before any decryption
 
+pub mod key_rotation;
+
 use crate::veilid_node::VeilidNode;
 use anyhow::{bail, Result};
 use rand::RngCore;
@@ -334,6 +336,22 @@ impl CryptoService {
         hasher.update(shared.as_bytes());
         Ok(hasher.finalize().as_bytes().to_vec())
     }
+
+    /// Derive a 32-byte database encryption key from a passphrase and salt
+    /// using Argon2id (memory-hard KDF).
+    ///
+    /// The salt MUST be exactly 16 bytes. The passphrase can be any length.
+    /// Uses Argon2id with default parameters (19 MiB memory, 2 iterations,
+    /// 1 parallelism) which is suitable for interactive logins.
+    pub fn derive_db_key(passphrase: &str, salt: &[u8; 16]) -> Result<[u8; 32]> {
+        use argon2::Argon2;
+
+        let mut output = [0u8; 32];
+        Argon2::default()
+            .hash_password_into(passphrase.as_bytes(), salt, &mut output)
+            .map_err(|e| anyhow::anyhow!("argon2id KDF failed: {}", e))?;
+        Ok(output)
+    }
 }
 
 #[cfg(test)]
@@ -380,6 +398,32 @@ mod crypto_service_tests {
 
         assert_eq!(alice_view, bob_view);
         assert_eq!(alice_view.len(), 32);
+    }
+
+    #[test]
+    fn test_derive_db_key_deterministic() {
+        let salt = [42u8; 16];
+        let key1 = CryptoService::derive_db_key("my passphrase", &salt).unwrap();
+        let key2 = CryptoService::derive_db_key("my passphrase", &salt).unwrap();
+        assert_eq!(key1, key2);
+        assert_eq!(key1.len(), 32);
+    }
+
+    #[test]
+    fn test_derive_db_key_different_passphrases() {
+        let salt = [42u8; 16];
+        let key1 = CryptoService::derive_db_key("pass1", &salt).unwrap();
+        let key2 = CryptoService::derive_db_key("pass2", &salt).unwrap();
+        assert_ne!(key1, key2);
+    }
+
+    #[test]
+    fn test_derive_db_key_different_salts() {
+        let salt1 = [1u8; 16];
+        let salt2 = [2u8; 16];
+        let key1 = CryptoService::derive_db_key("same", &salt1).unwrap();
+        let key2 = CryptoService::derive_db_key("same", &salt2).unwrap();
+        assert_ne!(key1, key2);
     }
 
     #[test]

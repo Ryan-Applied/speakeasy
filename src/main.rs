@@ -60,12 +60,53 @@ async fn main() -> Result<()> {
         let key_bytes = hex_decode(&hex_key)?;
         LocalStorage::open_encrypted(&db_path, &key_bytes)?
     } else {
-        LocalStorage::open(&db_path)?
+        // Passphrase-based KDF path: check for salt file.
+        // NOTE: passphrase prompt happens BEFORE entering raw mode for TUI.
+        let salt_path = data_dir.join("db.salt");
+        if salt_path.exists() {
+            // Existing salt -- prompt for passphrase
+            eprint!("Enter database passphrase: ");
+            let mut passphrase = String::new();
+            std::io::BufRead::read_line(&mut std::io::stdin().lock(), &mut passphrase)?;
+            let passphrase = passphrase.trim_end();
+            let salt_bytes = std::fs::read(&salt_path)?;
+            if salt_bytes.len() != 16 {
+                anyhow::bail!("salt file is corrupted (expected 16 bytes, got {})", salt_bytes.len());
+            }
+            let mut salt = [0u8; 16];
+            salt.copy_from_slice(&salt_bytes);
+            let key = veilid_chat::crypto::CryptoService::derive_db_key(passphrase, &salt)?;
+            LocalStorage::open_encrypted(&db_path, &key)?
+        } else if !db_path.exists() {
+            // No salt file and no existing DB -- generate salt, prompt for new passphrase
+            use rand::RngCore;
+            let mut salt = [0u8; 16];
+            rand::thread_rng().fill_bytes(&mut salt);
+            std::fs::write(&salt_path, &salt)?;
+            info!("generated new DB salt at {}", salt_path.display());
+
+            eprint!("Set database passphrase (or press Enter for unencrypted): ");
+            let mut passphrase = String::new();
+            std::io::BufRead::read_line(&mut std::io::stdin().lock(), &mut passphrase)?;
+            let passphrase = passphrase.trim_end();
+
+            if passphrase.is_empty() {
+                // User chose no passphrase -- remove salt, open unencrypted
+                let _ = std::fs::remove_file(&salt_path);
+                LocalStorage::open(&db_path)?
+            } else {
+                let key = veilid_chat::crypto::CryptoService::derive_db_key(passphrase, &salt)?;
+                LocalStorage::open_encrypted(&db_path, &key)?
+            }
+        } else {
+            // Existing DB but no salt file -- open unencrypted (legacy)
+            LocalStorage::open(&db_path)?
+        }
     };
 
     // ── Wire up services ─────────────────────────────────────────
     let _dht = VeilidDht::new(node.clone());
-    let chat = ChatService::new(storage);
+    let chat = ChatService::with_node(storage, node.clone());
 
     // ── Launch the terminal UI ───────────────────────────────────
     info!("launching TUI");

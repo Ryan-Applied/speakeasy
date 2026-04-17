@@ -47,14 +47,17 @@ pub struct Room {
     pub dht_metadata_key: Vec<u8>,    // DHT record key for room metadata
     pub dht_members_key: Vec<u8>,     // DHT record key for member list
     pub dht_messages_key: Vec<u8>,    // DHT record key for message log
+    pub description: Option<String>,
     pub members: Vec<RoomMember>,
     pub last_sync_seq: u64,
     pub schema_version: u8,
+    pub disappear_after_secs: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MemberRole {
     Admin,
+    Moderator,
     Member,
 }
 
@@ -115,6 +118,7 @@ pub struct Message {
     pub attachments: Vec<AttachmentRef>,
     pub status: MessageStatus,
     pub signature: Vec<u8>,
+    pub epoch: u32,                  // key rotation epoch (0 = pre-rotation)
 }
 
 // ---------------------------------------------------------------------------
@@ -253,6 +257,72 @@ pub struct EncryptedEnvelope {
     pub ciphertext: Vec<u8>,
     pub signature: Vec<u8>,          // 64 bytes
     pub sender_fingerprint: [u8; 8], // first 8 bytes of blake3(pubkey)
+}
+
+// ---------------------------------------------------------------------------
+// Key rotation
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KeyEpoch {
+    pub room_id: [u8; 32],
+    pub epoch: u32,
+    pub room_key: Vec<u8>,
+    pub rotated_at: DateTime<Utc>,
+    pub rotated_by: Vec<u8>,
+}
+
+// ---------------------------------------------------------------------------
+// Room admin actions
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AdminActionType {
+    Kick,
+    Ban,
+    Promote,
+    Demote,
+    Rename,
+    SetDescription,
+}
+
+impl fmt::Display for AdminActionType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Kick => write!(f, "kick"),
+            Self::Ban => write!(f, "ban"),
+            Self::Promote => write!(f, "promote"),
+            Self::Demote => write!(f, "demote"),
+            Self::Rename => write!(f, "rename"),
+            Self::SetDescription => write!(f, "set_description"),
+        }
+    }
+}
+
+impl AdminActionType {
+    pub fn from_str_action(s: &str) -> Option<Self> {
+        match s {
+            "kick" => Some(Self::Kick),
+            "ban" => Some(Self::Ban),
+            "promote" => Some(Self::Promote),
+            "demote" => Some(Self::Demote),
+            "rename" => Some(Self::Rename),
+            "set_description" => Some(Self::SetDescription),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RoomAction {
+    pub action_id: String,
+    pub room_id: [u8; 32],
+    pub actor_key: Vec<u8>,
+    pub action_type: AdminActionType,
+    pub target_key: Option<Vec<u8>>,
+    pub metadata: Option<String>,
+    pub signature: Vec<u8>,
+    pub created_at: DateTime<Utc>,
 }
 
 // ---------------------------------------------------------------------------
